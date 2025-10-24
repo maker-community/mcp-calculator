@@ -1,10 +1,11 @@
 using McpPipeClient;
+using McpPipeClient.Models;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-Console.WriteLine("Starting MCP Pipe Client...");
+Console.WriteLine("Starting MCP Platform...");
 
 // Create host builder
 var builder = Host.CreateDefaultBuilder(args);
@@ -12,8 +13,11 @@ var builder = Host.CreateDefaultBuilder(args);
 // Configure services
 builder.ConfigureServices((context, services) =>
 {
-    services.AddHostedService<McpPipeService>();
-    // ILoggerFactory is already provided by Host.CreateDefaultBuilder, no need to register again
+    // Bind platform configuration
+    services.Configure<McpPlatformConfig>(context.Configuration.GetSection("McpPlatform"));
+    
+    // Register platform service
+    services.AddHostedService<McpPlatformService>();
 });
 
 // Configure logging
@@ -27,7 +31,7 @@ builder.ConfigureLogging((context, logging) =>
 // Configure configuration
 builder.ConfigureAppConfiguration((context, config) =>
 {
-    config.AddJsonFile("appsettings.json", optional: true);
+    config.AddJsonFile("appsettings.json", optional: false, reloadOnChange: true);
     config.AddUserSecrets<Program>(optional: true);
     config.AddEnvironmentVariables();
     config.AddCommandLine(args);
@@ -45,17 +49,34 @@ Console.CancelKeyPress += (sender, e) =>
 {
     e.Cancel = true;
     Console.WriteLine("Received interrupt signal, shutting down...");
-    host.StopAsync().Wait(TimeSpan.FromSeconds(5));
+    host.StopAsync().Wait(TimeSpan.FromSeconds(10));
 };
 
 try
 {
     Console.WriteLine("Starting host...");
 
-    // Verify configuration is loaded
+    // Display configuration
     var config = host.Services.GetRequiredService<IConfiguration>();
-    Console.WriteLine($"MCP Server URL from config: {config["MCP_SERVER_URL"]}");
-    Console.WriteLine($"MCP Endpoint from config: {config["MCP_ENDPOINT"]?[..50]}..."); // Show first 50 chars for security
+    var platformConfig = config.GetSection("McpPlatform").Get<McpPlatformConfig>();
+    
+    if (platformConfig != null)
+    {
+        Console.WriteLine($"Platform Configuration:");
+        Console.WriteLine($"  Default MCP Server: {platformConfig.DefaultMcpServerUrl}");
+        Console.WriteLine($"  Configured Endpoints: {platformConfig.Endpoints.Count}");
+        
+        foreach (var endpoint in platformConfig.Endpoints.Where(e => e.Enabled))
+        {
+            Console.WriteLine($"    - {endpoint.Id} ({endpoint.Name})");
+            Console.WriteLine($"      WebSocket: {endpoint.WebSocketEndpoint[..Math.Min(50, endpoint.WebSocketEndpoint.Length)]}...");
+            Console.WriteLine($"      MCP Server: {endpoint.McpServerUrl ?? "Default"}");
+        }
+    }
+    else
+    {
+        Console.WriteLine("Warning: No platform configuration found");
+    }
 
     await host.RunAsync();
 }
@@ -64,4 +85,5 @@ catch (Exception ex)
     var logger = host.Services.GetService<ILogger<Program>>();
     logger?.LogError("Program execution error: {Error}", ex.Message);
     Console.WriteLine($"Error: {ex.Message}");
+    Console.WriteLine($"Stack trace: {ex.StackTrace}");
 }
